@@ -1,0 +1,40 @@
+[gd_scene format=3 uid="uid://cueobr5jceejq"]
+
+[ext_resource type="Script" uid="uid://t1hxiv1lth5j" path="res://scripts/world.gd" id="1"]
+[ext_resource type="Texture2D" uid="uid://cdbpne75e58nd" path="res://art/ground.png" id="2"]
+[ext_resource type="PackedScene" path="res://scenes/campfire.tscn" id="3"]
+[ext_resource type="PackedScene" path="res://scenes/player.tscn" id="4"]
+[ext_resource type="Script" uid="uid://fg30ylkf8y0d" path="res://scripts/snowfall.gd" id="5"]
+[ext_resource type="Script" uid="uid://ccygmdtorrg2g" path="res://scripts/atmosphere.gd" id="6"]
+[ext_resource type="Script" uid="uid://conrxkrrwintw" path="res://scripts/ui.gd" id="7"]
+
+[node name="Main" type="Node2D" unique_id=1464222579]
+script = ExtResource("1")
+
+[node name="CanvasModulate" type="CanvasModulate" parent="." unique_id=1801099387]
+color = Color(0.5, 0.58, 0.86, 1)
+
+[node name="Ground" type="Sprite2D" parent="." unique_id=751172933]
+texture = ExtResource("2")
+
+[node name="Decals" type="Node2D" parent="." unique_id=366743023]
+
+[node name="Entities" type="Node2D" parent="." unique_id=1621563096]
+y_sort_enabled = true
+
+[node name="Campfire" parent="Entities" unique_id=896687981 instance=ExtResource("3")]
+
+[node name="Player" parent="Entities" unique_id=1909491408 instance=ExtResource("4")]
+
+[node name="Fx" type="CanvasLayer" parent="." unique_id=1562767288 groups=["fx"]]
+layer = 2
+follow_viewport_enabled = true
+
+[node name="Snowfall" type="CanvasLayer" parent="." unique_id=1009552021]
+script = ExtResource("5")
+
+[node name="Atmosphere" type="CanvasLayer" parent="." unique_id=1665668695]
+script = ExtResource("6")
+
+[node name="UI" type="CanvasLayer" parent="." unique_id=879750305]
+script = ExtResource("7")

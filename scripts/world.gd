@@ -13,6 +13,18 @@ const TREE_TARGET := 250
 const ROCK_TARGET := 26
 const MOUND_TARGET := 90
 const CELL := 24.0
+const CAVE_POS := Vector2(800, 96)          # Eingang zur Frosthöhle (Norden)
+const SIGN_POS := Vector2(846, 470)         # Wegweiser nahe am Lagerfeuer
+const PATH_HALF_WIDTH := 46.0               # Breite des freigehaltenen Waldwegs zur Höhle
+
+# Welche Gegnerarten ab welcher Stufe auftauchen und wie oft (Gewicht = Häufigkeit).
+const KIND_TABLE := [
+	{"kind": "blob", "min_level": 1, "weight": 4.0},
+	{"kind": "wisp", "min_level": 1, "weight": 2.0},
+	{"kind": "fox", "min_level": 2, "weight": 2.5},
+	{"kind": "hedgehog", "min_level": 3, "weight": 2.0},
+	{"kind": "snowman", "min_level": 3, "weight": 2.0},
+]
 
 # Die Dämmerung "atmet" ganz langsam zwischen diesen zwei Farben.
 const DUSK_A := Color(0.50, 0.58, 0.86)
@@ -51,6 +63,11 @@ func _ready() -> void:
 
 	campfire.position = FIRE_POS
 	player.position = FIRE_POS + Vector2(0, 62)
+	if Game.next_entry == "from_arena":                  # aus der Frosthöhle zurück: vor dem Eingang
+		player.position = CAVE_POS + Vector2(0, 56)
+		player.aim = Vector2.DOWN
+	Game.next_entry = ""
+	Sound.set_mode("world")
 	player.set_world_bounds(Rect2(Vector2.ZERO, MAP_SIZE))
 	player.stepped.connect(_on_player_stepped)
 	player.died.connect(ui.show_death)
@@ -60,6 +77,7 @@ func _ready() -> void:
 
 	_build_walls()
 	_scatter_props()
+	_build_cave()
 	for i in MAX_ENEMIES - 2:
 		_spawn_enemy(140.0)
 
@@ -112,8 +130,8 @@ func _scatter_props() -> void:
 	while placed < TREE_TARGET and attempts < 9000:
 		attempts += 1
 		var p := Vector2(_rng.randf_range(18.0, MAP_SIZE.x - 18.0), _rng.randf_range(30.0, MAP_SIZE.y - 10.0))
-		if p.distance_to(FIRE_POS) < 115.0:
-			continue                                   # Lichtung um das Lagerfeuer
+		if p.distance_to(FIRE_POS) < 115.0 or _in_path(p):
+			continue                                   # Lichtung um das Lagerfeuer und Weg zur Höhle
 		var edge := minf(minf(p.x, MAP_SIZE.x - p.x), minf(p.y, MAP_SIZE.y - p.y))
 		if edge > 120.0 and _rng.randf() > 0.2:
 			continue                                   # am Rand dichter Wald, innen lichter
@@ -131,7 +149,7 @@ func _scatter_props() -> void:
 	while placed < ROCK_TARGET and attempts < 3000:
 		attempts += 1
 		var p := Vector2(_rng.randf_range(40.0, MAP_SIZE.x - 40.0), _rng.randf_range(50.0, MAP_SIZE.y - 30.0))
-		if p.distance_to(FIRE_POS) < 90.0 or not _free_spot(p, 24.0):
+		if p.distance_to(FIRE_POS) < 90.0 or _in_path(p) or not _free_spot(p, 24.0):
 			continue
 		_claim(p)
 		_add_prop(rock, p, 7.0, _rng.randf() < 0.5)
@@ -145,6 +163,36 @@ func _scatter_props() -> void:
 		m.scale = Vector2.ONE * _rng.randf_range(0.8, 1.6)
 		m.flip_h = _rng.randf() < 0.5
 		decals.add_child(m)
+
+
+## Frei bleibender Streifen: der Waldweg vom Lagerfeuer zum Höhleneingang und der Platz davor.
+func _in_path(p: Vector2) -> bool:
+	if p.distance_to(CAVE_POS) < 90.0:
+		return true
+	return absf(p.x - CAVE_POS.x) < PATH_HALF_WIDTH and p.y > CAVE_POS.y - 20.0 and p.y < FIRE_POS.y - 100.0
+
+
+## Höhleneingang im Norden mit leuchtenden Kristallen und ein Wegweiser am Lagerfeuer.
+func _build_cave() -> void:
+	_claim(CAVE_POS)
+	var scene: PackedScene = load("res://scenes/portal.tscn")
+	var cave: Portal = scene.instantiate()
+	cave.position = CAVE_POS
+	cave.target_scene = Scenes.ARENA
+	cave.prompt = "E: Frosthöhle betreten  (hier wartet ein starker Gegner)"
+	entities.add_child(cave)
+	_claim(SIGN_POS)
+	_add_prop(load("res://art/sign.png"), SIGN_POS, 4.0, false)
+	var crystal: Texture2D = load("res://art/crystal_b.png")
+	for off in [Vector2(-46, 8), Vector2(48, 10), Vector2(-34, -4), Vector2(36, -2)]:
+		var body := _add_prop(crystal, CAVE_POS + off, 8.0, off.x > 0.0)
+		var l := PointLight2D.new()
+		l.texture = load("res://art/light.png")
+		l.color = Color(0.5, 0.88, 1.0)
+		l.energy = 0.35
+		l.texture_scale = 0.3
+		l.position = Vector2(0, -14)
+		body.add_child(l)
 
 
 func _place_lit_tree(pos: Vector2) -> void:
@@ -226,9 +274,23 @@ func _spawn_enemy(min_dist: float) -> void:
 		var enemy: Enemy = _enemy_scene.instantiate()
 		enemy.position = p
 		entities.add_child(enemy)
-		var wisp_chance := minf(0.55, 0.25 + 0.03 * float(Game.level))
-		enemy.setup("wisp" if randf() < wisp_chance else "blob", Game.level, player, FIRE_POS, FIRE_SAFE_RADIUS)
+		enemy.setup(_pick_kind(), Game.level, player, FIRE_POS, FIRE_SAFE_RADIUS)
 		return
+
+
+## Wählt eine Gegnerart passend zur Stufe (siehe KIND_TABLE).
+func _pick_kind() -> String:
+	var total := 0.0
+	for e in KIND_TABLE:
+		if Game.level >= int(e["min_level"]):
+			total += float(e["weight"])
+	var r := randf() * total
+	for e in KIND_TABLE:
+		if Game.level >= int(e["min_level"]):
+			r -= float(e["weight"])
+			if r <= 0.0:
+				return String(e["kind"])
+	return "blob"
 
 
 func _on_player_stepped(pos: Vector2, dir: Vector2, side: float) -> void:

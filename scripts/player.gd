@@ -1,16 +1,26 @@
 extends CharacterBody2D
 class_name Player
-## Die Spielfigur: bewegen, zuschlagen, Schaden nehmen.
-## Ein Schlag trifft alle Gegner in einem Kegel vor dir (Reichweite und Winkel stehen unten).
+## Die Spielfigur: laufen, sprinten, zuschlagen, Schaden nehmen.
+## Ein Schlag trifft alle Gegner in einem Kegel vor dir (Reichweite und Winkel stehen unten)
+## und schlägt dabei auch Schneebälle weg.
 
 signal died
 signal health_changed(current: int, maximum: int)
+signal stamina_changed(current: float, maximum: float)
 signal stepped(pos: Vector2, dir: Vector2, side: float)
 
 const SPEED := 90.0
+const SPRINT_MULT := 1.65          # Sprint (Shift): so viel schneller
 const ACCEL := 820.0
 const FRICTION := 1100.0
 const KNOCKBACK_DECAY := 700.0
+
+# Ausdauer: Sprinten kostet Ausdauer, sie erholt sich kurz danach von selbst wieder.
+const STAMINA_MAX := 100.0
+const STAMINA_DRAIN := 32.0        # pro Sekunde beim Sprinten (ca. 3 s am Stück)
+const STAMINA_REGEN := 24.0        # pro Sekunde beim Erholen
+const STAMINA_DELAY := 0.6         # so lange nach dem Sprinten fängt die Erholung noch nicht an
+const STAMINA_RECOVER_AT := 30.0   # nach völliger Erschöpfung erst ab hier wieder sprinten
 
 const ATTACK_TIME := 0.36          # Dauer eines Schlags in Sekunden
 const ATTACK_HIT_AT := 0.10        # so lange nach Beginn zählt der Treffer
@@ -21,6 +31,9 @@ const INVULN_TIME := 0.8           # Schonzeit nach einem Treffer
 const STEP_LENGTH := 13.0          # Abstand zwischen zwei Fußspuren
 
 var health: int = 50
+var stamina := STAMINA_MAX
+var sprinting := false
+var exhausted := false
 var aim := Vector2.DOWN            # Blick- und Schlagrichtung
 var dead := false
 
@@ -37,7 +50,11 @@ var _step_count := 0
 var _shake := 0.0
 var _time := 0.0
 var _last_max := 50
+var _stamina_delay := 0.0
+var _stamina_sent := STAMINA_MAX
+var _exhausted_sent := false
 var _death_tween: Tween
+var _puff: CPUParticles2D
 
 @onready var sprite: Sprite2D = $Sprite
 @onready var camera: Camera2D = $Camera2D
@@ -48,8 +65,13 @@ func _ready() -> void:
 	camera.zoom = Vector2.ONE * Game.WORLD_ZOOM
 	_last_max = Game.max_health()
 	health = _last_max
+	if Game.carry_health > 0:                      # aus einem anderen Gebiet mitgebrachtes Leben
+		health = mini(Game.carry_health, _last_max)
+	Game.carry_health = -1
 	Game.stats_changed.connect(_on_stats_changed)
 	Game.level_up.connect(_on_level_up)
+	_puff = _make_puff()
+	add_child(_puff)
 
 
 func set_world_bounds(r: Rect2) -> void:
@@ -57,6 +79,21 @@ func set_world_bounds(r: Rect2) -> void:
 	camera.limit_top = int(r.position.y)
 	camera.limit_right = int(r.end.x)
 	camera.limit_bottom = int(r.end.y)
+
+
+func add_shake(amount: float) -> void:
+	_shake = maxf(_shake, amount)
+
+
+## Kamera sanft näher/weiter stellen (beim Bosskampf wird herausgezoomt, damit alles ins Bild passt).
+func set_camera_zoom(zoom_level: float, seconds := 1.5) -> void:
+	var tw := create_tween()
+	tw.tween_property(camera, "zoom", Vector2.ONE * zoom_level, seconds).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+
+
+func heal_full() -> void:
+	health = Game.max_health()
+	health_changed.emit(health, health)
 
 
 # --------------------------------------------------------------------- Eingabe
@@ -80,6 +117,7 @@ func _physics_process(delta: float) -> void:
 	_knockback = _knockback.move_toward(Vector2.ZERO, KNOCKBACK_DECAY * delta)
 
 	if dead:
+		sprinting = false
 		_move_vel = Vector2.ZERO
 		velocity = _knockback
 		move_and_slide()
@@ -87,7 +125,8 @@ func _physics_process(delta: float) -> void:
 
 	var input := Input.get_vector("move_left", "move_right", "move_up", "move_down")
 	var attacking := _attack_t > 0.0
-	var top_speed := SPEED * (ATTACK_MOVE_FACTOR if attacking else 1.0)
+	_update_sprint(delta, input, attacking)
+	var top_speed := SPEED * (SPRINT_MULT if sprinting else 1.0) * (ATTACK_MOVE_FACTOR if attacking else 1.0)
 	if input != Vector2.ZERO:
 		_move_vel = _move_vel.move_toward(input * top_speed, ACCEL * delta)
 		if not attacking:
@@ -113,12 +152,62 @@ func _process(delta: float) -> void:
 		camera.offset = Vector2.ZERO
 	# Laterne flackert ganz leicht
 	light.energy = 0.30 + sin(_time * 6.3) * 0.015 + sin(_time * 14.1) * 0.01
+	_puff.emitting = sprinting and not dead
+	_puff.direction = -aim
 	if dead:
 		return
 	if _invuln > 0.0 and int(_invuln * 22.0) % 2 == 0:
 		sprite.modulate.a = 0.35
 	else:
 		sprite.modulate.a = 1.0
+
+
+# --------------------------------------------------------------------- Sprint & Ausdauer
+func _update_sprint(delta: float, input: Vector2, attacking: bool) -> void:
+	var was := sprinting
+	var wants := Input.is_action_pressed("sprint") and input != Vector2.ZERO and not attacking and not exhausted
+	if wants and stamina > 0.0:
+		sprinting = true
+		stamina = maxf(0.0, stamina - STAMINA_DRAIN * delta)
+		_stamina_delay = STAMINA_DELAY
+		if stamina <= 0.0:                       # völlig außer Puste
+			sprinting = false
+			exhausted = true
+			Sound.play("tired")
+			Fx.text(self, global_position + Vector2(0, -30), "puh ...", Color(0.7, 0.9, 1.0), 16, 0.9)
+	else:
+		sprinting = false
+		_stamina_delay -= delta
+		if _stamina_delay <= 0.0:
+			stamina = minf(STAMINA_MAX, stamina + STAMINA_REGEN * delta)
+	if exhausted and stamina >= STAMINA_RECOVER_AT:
+		exhausted = false
+	if sprinting and not was:
+		Sound.play("sprint")
+	if absf(stamina - _stamina_sent) > 0.4 or exhausted != _exhausted_sent:
+		_stamina_sent = stamina
+		_exhausted_sent = exhausted
+		stamina_changed.emit(stamina, STAMINA_MAX)
+
+
+func _make_puff() -> CPUParticles2D:
+	var p := CPUParticles2D.new()
+	p.amount = 24
+	p.lifetime = 0.55
+	p.emitting = false
+	p.local_coords = false                       # Schneewölkchen bleiben liegen, wo sie entstehen
+	p.position = Vector2(0, -2)
+	p.spread = 38.0
+	p.gravity = Vector2.ZERO
+	p.initial_velocity_min = 14.0
+	p.initial_velocity_max = 34.0
+	p.scale_amount_min = 2.2
+	p.scale_amount_max = 4.6
+	var ramp := Gradient.new()
+	ramp.offsets = PackedFloat32Array([0.0, 1.0])
+	ramp.colors = PackedColorArray([Color(1, 1, 1, 0.95), Color(1, 1, 1, 0.0)])
+	p.color_ramp = ramp
+	return p
 
 
 # --------------------------------------------------------------------- Angriff
@@ -161,6 +250,19 @@ func _deal_damage() -> void:
 		var dmg := maxi(1, Game.attack_damage() + randi_range(-1, 1))
 		e.take_hit(dmg, aim)
 		hits += 1
+	# Schneebälle wegschlagen
+	for node in get_tree().get_nodes_in_group("projectiles"):
+		var pr := node as Projectile
+		if pr == null or not pr.swattable:
+			continue
+		var to_p := pr.global_position - global_position
+		var d := to_p.length()
+		if d > ATTACK_REACH + 8.0 + pr.hit_radius:
+			continue
+		if d > 3.0 and aim.dot(to_p / d) < cos_half:
+			continue
+		pr.swat()
+		hits += 1
 	if hits > 0:
 		_shake = maxf(_shake, 1.2)
 		Game.hit_stop(0.045)
@@ -175,7 +277,7 @@ func take_hit(amount: int, from_pos: Vector2) -> void:
 	_invuln = INVULN_TIME
 	var away := global_position - from_pos
 	_knockback = (away.normalized() if away.length() > 0.1 else -aim) * 140.0
-	_shake = 3.0
+	_shake = maxf(_shake, 3.0)
 	Fx.text(self, global_position + Vector2(0, -30), str(dmg), Color(1.0, 0.46, 0.42), 22)
 	health_changed.emit(health, Game.max_health())
 	if health <= 0:
@@ -199,6 +301,7 @@ func heal(amount: int) -> void:
 
 func _die() -> void:
 	dead = true
+	sprinting = false
 	_attack_t = 0.0
 	_buffered = 0.0
 	Sound.play("death")
@@ -219,6 +322,8 @@ func respawn(at: Vector2) -> void:
 	_knockback = Vector2.ZERO
 	_last_max = Game.max_health()
 	health = _last_max
+	stamina = STAMINA_MAX
+	exhausted = false
 	_invuln = 2.0
 	Sound.play("respawn")
 	health_changed.emit(health, _last_max)
@@ -245,13 +350,13 @@ func _update_footsteps(moved: float) -> void:
 	if moved < 0.01 or _move_vel.length() < 10.0:
 		return
 	_step_dist += moved
-	if _step_dist >= STEP_LENGTH:
+	if _step_dist >= STEP_LENGTH * (1.3 if sprinting else 1.0):
 		_step_dist = 0.0
 		_step_side = -_step_side
 		stepped.emit(global_position, _move_vel.normalized(), _step_side)
 		_step_count += 1
-		if _step_count % 3 == 0:                 # nicht jede Fußspur ein Geräusch
-			Sound.play("step")
+		if _step_count % (2 if sprinting else 3) == 0:     # nicht jede Fußspur ein Geräusch
+			Sound.play("step", 0.0, 1.12 if sprinting else 1.0)
 
 
 func _animate(delta: float) -> void:
@@ -269,8 +374,8 @@ func _animate(delta: float) -> void:
 	var ratio := _move_vel.length() / SPEED
 	if ratio > 0.1:
 		_walk_phase += delta * (9.0 + 6.0 * ratio)
-		sprite.position.y = -absf(sin(_walk_phase)) * 1.8      # Hüpfen beim Laufen
-		sprite.rotation = sin(_walk_phase) * 0.07
+		sprite.position.y = -absf(sin(_walk_phase)) * (2.6 if sprinting else 1.8)      # Hüpfen beim Laufen
+		sprite.rotation = sin(_walk_phase) * 0.07 + (aim.x * 0.1 if sprinting else 0.0)  # beim Sprint nach vorn geneigt
 		sprite.scale = Vector2.ONE
 	else:
 		sprite.position.y = lerpf(sprite.position.y, 0.0, minf(1.0, delta * 12.0))

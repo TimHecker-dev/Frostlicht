@@ -7,6 +7,7 @@ Aufruf:   python3 tools/make_audio.py              (alles)
           python3 tools/make_audio.py music        (nur Musik)
           python3 tools/make_audio.py ambience     (nur Wind + Lagerfeuer)
           python3 tools/make_audio.py sfx          (nur Effekte)
+          python3 tools/make_audio.py boss         (nur Boss-Musik)
 
 Die Musik ist in F-Dur komponiert (langsam, weiche Akkorde mit zusätzlichen Tönen).
 Tonart, Tempo, Akkorde und Melodie stehen im Abschnitt "Komposition" und lassen sich leicht ändern.
@@ -479,6 +480,140 @@ def build_alert_layer():
     save_ogg("music_alert", mix)
 
 
+# ===================================================================== Boss-Musik
+# D-Moll (die Moll-Parallele von F-Dur, also verwandt mit der Wald-Musik), 92 BPM, mehr Antrieb.
+BOSS_PROG = [
+    [(0, "Dm9")], [(0, "Bbmaj9")], [(0, "Gm9")], [(0, "Am9")],
+    [(0, "Dm9")], [(0, "Bbmaj9")], [(0, "Fmaj9")], [(0, "C9sus"), (2, "Cadd9")],
+    [(0, "Gm9")], [(0, "Dm9")], [(0, "Bbmaj9")], [(0, "Am9")],
+    [(0, "Gm9")], [(0, "Bbmaj9")], [(0, "Am9"), (2, "C13sus")], [(0, "Dm9")],
+]
+BOSS_MELODY = [
+    [(74, 0, 1), (77, 1, 1), (81, 2, 1.5), (77, 3.5, .5)],
+    [(82, 0, 1), (81, 1, 1), (77, 2, 1), (74, 3, 1)],
+    [(79, 0, 1), (82, 1, 1), (86, 2, 2)],
+    [(84, 0, 1.5), (81, 1.5, .5), (79, 2, 1), (76, 3, 1)],
+    [(74, 0, 1), (77, 1, 1), (81, 2, 1), (84, 3, 1)],
+    [(86, 0, 2), (82, 2, 1), (81, 3, 1)],
+    [(84, 0, 1), (81, 1, 1), (77, 2, 2)],
+    [(79, 0, 2), (81, 2, 1), (79, 3, 1)],
+    [(86, 0, 1.5), (82, 1.5, .5), (79, 2, 2)],
+    [(81, 0, 1), (77, 1, 1), (74, 2, 1), (77, 3, 1)],
+    [(82, 0, 1), (86, 1, 1), (89, 2, 2)],
+    [(88, 0, 1), (84, 1, 1), (81, 2, 2)],
+    [(79, 0, 1), (82, 1, 1), (81, 2, 1), (79, 3, 1)],
+    [(86, 0, 2), (84, 2, 2)],
+    [(81, 0, 2), (84, 2, 2)],
+    [(81, 0, 2), (74, 2, 2)],
+]
+CALM_PIECE = (66.0, PROG, MELODY)
+
+
+def use_piece(bpm, prog, melody):
+    """Stellt Tempo, Akkorde und Melodie um (die render_*-Funktionen lesen diese Werte)."""
+    global BPM, BEAT, LOOP_N, PROG, MELODY
+    BPM = bpm
+    BEAT = 60.0 / bpm
+    LOOP_N = int(round(BARS * 4 * BEAT * SR))
+    PROG = prog
+    MELODY = melody
+
+
+def shaker(vel=1.0, dur=0.07):
+    n = int(dur * SR)
+    t = np.arange(n) / SR
+    nz = np.random.default_rng(int(vel * 1000) + 3).standard_normal(n)
+    return fade_edges(bandpass(nz, 3500, 9000, 1) * np.exp(-t / 0.018), 0.001, 0.02) * vel
+
+
+def tom(f, vel=1.0):
+    n = int(0.35 * SR)
+    t = np.arange(n) / SR
+    fr = f * (1.0 + 0.8 * np.exp(-t / 0.03))
+    return fade_edges(np.sin(2 * np.pi * np.cumsum(fr) / SR) * np.exp(-t / 0.13), 0.002, 0.05) * vel
+
+
+def render_boss_bass():
+    buf = new_buf()
+    for bar in range(BARS):
+        for b0, b1, name in segments(bar):
+            root = CH[name]["root"]
+            for e in range(int(round((b1 - b0) * 2))):
+                beat = b0 + e * 0.5
+                m = root + (12 if e % 4 == 3 else 0)
+                vel = 0.95 if e % 4 == 0 else (0.7 if e % 2 == 0 else 0.5)
+                add_loop(buf, bass(midi(m), 0.42, vel), S(bar, beat))
+    return buf
+
+
+def render_boss_marimba():
+    buf = new_buf()
+    rng = np.random.default_rng(51)
+    pat = [0, 2, 4, 2, 1, 3, 4, 3, 0, 2, 3, 2, 1, 3, 4, 3]
+    for bar in range(BARS):
+        for s in range(16):
+            beat = s * 0.25
+            m = CH[chord_at(bar, beat)]["notes"][pat[s]] + 12
+            vel = (0.7 if s % 4 == 0 else 0.42) * rng.uniform(0.9, 1.08)
+            add_loop(buf, marimba(midi(m), 0.5, vel), S(bar, beat) + int(rng.normal(0, 0.003) * SR),
+                     1.0, 0.3 if s % 2 else -0.3)
+    return buf
+
+
+def render_boss_drums():
+    buf = new_buf()
+    rng = np.random.default_rng(52)
+    for bar in range(BARS):
+        add_loop(buf, thump(1.0), S(bar, 0.0))
+        add_loop(buf, thump(0.85), S(bar, 2.0))
+        add_loop(buf, thump(0.30), S(bar, 3.5))
+        if bar % 2 == 1:
+            add_loop(buf, thump(0.4), S(bar, 1.5))
+        if bar % 4 == 3:                                       # Wirbel vor dem Phrasenwechsel
+            for k in range(6):
+                add_loop(buf, tom(110 + 12 * k, 0.35 + 0.08 * k), S(bar, 3.0 + k / 6.0))
+        for e in range(8):
+            v = 0.22 if e % 2 == 0 else 0.36
+            add_loop(buf, shaker(v * rng.uniform(0.85, 1.1)), S(bar, e * 0.5) + int(rng.normal(0, 0.003) * SR),
+                     1.0, 0.25 if e % 2 else -0.25)
+    return buf
+
+
+def build_boss_music():
+    use_piece(92.0, BOSS_PROG, BOSS_MELODY)
+    check_composition()
+    hall = make_ir(2.6, seed=21)
+    room = make_ir(1.2, seed=22)
+    print("  Boss-Musik: rendere Stimmen ...")
+    stems = [
+        (render_boss_bass(), 1.05, 0.08, room),
+        (render_pad(), 0.34, 0.30, hall),
+        (render_boss_marimba(), 0.60, 0.25, room),
+        (render_boss_drums(), 0.90, 0.12, room),
+        (render_ep(), 0.42, 0.45, hall),
+        (render_melody(), 0.80, 0.55, hall),
+        (render_sparkle(), 0.14, 0.90, hall),
+    ]
+    save_ogg("music_boss", master(mix_stems(stems), -20.0))
+    # Wut-Ebene: 16tel-Shaker, hohe Glöckchen-Läufe und Rücken-Toms (gleiche Länge, gleiche Akkorde)
+    rng = np.random.default_rng(53)
+    shak, bells, toms = new_buf(), new_buf(), new_buf()
+    pat = [4, 3, 2, 3, 4, 2, 3, 1]
+    for bar in range(BARS):
+        for s in range(16):
+            v = 0.26 if s % 2 == 0 else 0.4
+            add_loop(shak, shaker(v * rng.uniform(0.85, 1.1), 0.05), S(bar, s * 0.25), 1.0, 0.3 if s % 2 else -0.3)
+        for e in range(8):
+            m = CH[chord_at(bar, e * 0.5)]["notes"][pat[e]] + 24
+            add_loop(bells, bell(midi(m), 0.9, 0.35 * rng.uniform(0.9, 1.1), seed=bar * 8 + e), S(bar, e * 0.5),
+                     1.0, 0.4 if e % 2 else -0.4)
+        add_loop(toms, tom(98, 0.8), S(bar, 1.0))
+        add_loop(toms, tom(98, 0.8), S(bar, 3.0))
+    mix = mix_stems([(shak, 0.7, 0.10, room), (bells, 0.5, 0.50, hall), (toms, 0.9, 0.10, room)])
+    save_ogg("music_boss_rage", master(mix, -26.0, lp=6200.0))
+    use_piece(*CALM_PIECE)
+
+
 # ===================================================================== Ambiente (Loops)
 def build_wind(seconds=32.0):
     n = int(seconds * SR)
@@ -767,6 +902,183 @@ def sfx_respawn():
     return trim_tail(reverb_once(buf, IR_HALL, 0.45), fade=0.4)
 
 
+
+# ---------------------------------------------------------------- Effekte: Sprint, neue Gegner, Boss
+def growl(dur, f0, f1, seed, rattle=26.0):
+    """Tiefes Brummen/Brüllen: Sägezahn mit Vibrato plus ratterndes Rauschen, formantartig gefärbt."""
+    n = int(dur * SR)
+    t = np.arange(n) / SR
+    f = np.linspace(f0, f1, n) * (1.0 + 0.025 * np.sin(2 * np.pi * 6.0 * t))
+    ph = 2 * np.pi * np.cumsum(f) / SR
+    saw = np.zeros(n)
+    for k in range(1, 14):
+        saw += np.sin(k * ph + k * 0.3) / k
+    nz = bandpass(noise(dur, seed), 200, 1100, 1) * (0.55 + 0.45 * np.sin(2 * np.pi * rattle * t))
+    out = saw * 0.55 + nz * 0.45
+    out = out * 0.6 + bandpass(out, 300, 900, 1) * 0.8
+    return lowpass(out, 2400)
+
+
+def sfx_sprint():
+    buf = np.zeros(int(0.32 * SR))
+    place(buf, sweep(0.26, 700, 2600, 61, 0.22), 0.0)
+    place(buf, sfx_step(88), 0.03, 0.55)
+    return fade_edges(lowpass(buf, 5200), 0.004, 0.05)
+
+
+def sfx_tired():
+    n = int(0.9 * SR)
+    t = np.arange(n) / SR
+    env = np.sin(np.pi * np.clip(t / 0.8, 0, 1)) ** 2 * (0.75 + 0.25 * np.sin(2 * np.pi * 5.0 * t))
+    return fade_edges(lowpass(bandpass(noise(0.9, 62), 300, 2400, 1), 3000) * env, 0.02, 0.15)
+
+
+def sfx_throw():
+    buf = np.zeros(int(0.4 * SR))
+    place(buf, sweep(0.3, 500, 1800, 63, 0.3), 0.0)
+    tt = np.arange(int(0.12 * SR)) / SR
+    place(buf, np.sin(2 * np.pi * np.cumsum(260 + 220 * np.clip(tt / 0.08, 0, 1)) / SR) * np.exp(-tt / 0.05) * 0.45, 0.02)
+    return fade_edges(lowpass(buf, 4500), 0.004, 0.08)
+
+
+def sfx_snowball():
+    n = int(0.3 * SR)
+    t = np.arange(n) / SR
+    puff = lowpass(noise(0.3, 64), 1100) * np.exp(-t / 0.07)
+    thud = np.sin(2 * np.pi * np.cumsum(110 - 40 * np.minimum(1.0, t / 0.08)) / SR) * np.exp(-t / 0.06) * 0.8
+    return fade_edges(lowpass(puff * 0.9 + thud, 4000), 0.002, 0.08)
+
+
+def sfx_pounce():
+    buf = np.zeros(int(0.34 * SR))
+    tt = np.arange(int(0.18 * SR)) / SR
+    f = 620 + 540 * np.clip(tt / 0.1, 0, 1)
+    f = f * (1.0 + 0.03 * np.sin(2 * np.pi * 30 * tt))
+    yip = np.sin(2 * np.pi * np.cumsum(f) / SR) * np.exp(-tt / 0.07) * (1 - np.exp(-tt / 0.006))
+    place(buf, yip * 0.7, 0.0)
+    place(buf, sweep(0.22, 900, 3000, 65, 0.25), 0.0)
+    return fade_edges(lowpass(buf, 6000), 0.003, 0.08)
+
+
+def sfx_roll():
+    n = int(0.9 * SR)
+    t = np.arange(n) / SR
+    rate = 14.0 + 10.0 * t
+    rattle = 0.6 + 0.4 * np.sin(2 * np.pi * np.cumsum(rate) / SR)
+    body = bandpass(noise(0.9, 66), 150, 900, 1) * rattle
+    env = np.minimum(1.0, t / 0.12) * np.exp(-np.maximum(0.0, t - 0.55) / 0.12)
+    low = np.sin(2 * np.pi * 70 * t) * 0.25
+    return fade_edges(lowpass((body + low) * env, 2500), 0.01, 0.1)
+
+
+def sfx_tink():
+    buf = np.zeros(int(0.35 * SR))
+    place(buf, bell(midi(96), 0.3, 0.8, seed=11), 0.0)
+    place(buf, bell(midi(103), 0.22, 0.45, seed=12), 0.02)
+    place(buf, bandpass(noise(0.03, 13), 2500, 6000, 1) * 0.4, 0.0)
+    return fade_edges(buf, 0.001, 0.08)
+
+
+def sfx_boss_roar():
+    buf = np.zeros(int(2.2 * SR))
+    r = growl(1.7, 70, 52, 71)
+    t = np.arange(len(r)) / SR
+    env = np.minimum(1.0, t / 0.25) * np.exp(-np.maximum(0.0, t - 0.9) / 0.35)
+    place(buf, r * env, 0.0)
+    return trim_tail(mono(reverb_once(buf, IR_MED, 0.22)), fade=0.3)
+
+
+def sfx_boss_swipe():
+    buf = np.zeros(int(0.7 * SR))
+    place(buf, sweep(0.5, 250, 1400, 72, 0.9), 0.0)
+    tt = np.arange(int(0.25 * SR)) / SR
+    place(buf, np.sin(2 * np.pi * np.cumsum(90 - 35 * np.minimum(1.0, tt / 0.15)) / SR) * np.exp(-tt / 0.09), 0.3, 0.8)
+    place(buf, lowpass(noise(0.25, 73), 900) * np.exp(-tt / 0.06) * 0.5, 0.3)
+    return fade_edges(lowpass(buf, 4500), 0.01, 0.1)
+
+
+def sfx_boss_slam():
+    buf = np.zeros(int(1.7 * SR))
+    tt = np.arange(int(1.2 * SR)) / SR
+    boom = np.sin(2 * np.pi * np.cumsum(28 + 70 * np.exp(-tt / 0.12)) / SR) * np.exp(-tt / 0.45)
+    place(buf, boom, 0.0)
+    place(buf, lowpass(noise(0.4, 74), 900) * np.exp(-tt[: int(0.4 * SR)] / 0.08) * 0.8, 0.0)
+    place(buf, lowpass(noise(1.2, 75), 130) * np.exp(-tt / 0.9) * 0.9, 0.0)
+    r = np.random.default_rng(76)
+    for _ in range(26):                                   # Eis knirscht und bricht
+        t0 = r.uniform(0.02, 0.7)
+        ln = int(r.uniform(0.004, 0.02) * SR)
+        g = bandpass(r.standard_normal(ln), r.uniform(1800, 6000), 9000, 1) * np.exp(-np.arange(ln) / SR / 0.006)
+        place(buf, g * r.uniform(0.15, 0.5) * math.exp(-t0 / 0.5), t0)
+    return trim_tail(mono(reverb_once(buf, IR_MED, 0.28)), fade=0.35)
+
+
+def sfx_shards():
+    buf = np.zeros(int(1.4 * SR))
+    r = np.random.default_rng(77)
+    place(buf, sweep(0.5, 600, 4200, 78, 0.18), 0.0)
+    for _ in range(30):
+        f = r.uniform(1800, 5200)
+        t0 = r.uniform(0.0, 0.45)
+        tt = np.arange(int(0.3 * SR)) / SR
+        ping = (np.sin(2 * np.pi * f * tt) + 0.3 * np.sin(2 * np.pi * f * 2.76 * tt)) * np.exp(-tt / r.uniform(0.05, 0.16))
+        place(buf, ping * r.uniform(0.12, 0.35), t0)
+    return trim_tail(mono(reverb_once(lowpass(buf, 8500), IR_SMALL, 0.3)), fade=0.3)
+
+
+def sfx_boss_hit():
+    n = int(0.5 * SR)
+    t = np.arange(n) / SR
+    bump = np.sin(2 * np.pi * np.cumsum(55 + 80 * np.exp(-t / 0.05)) / SR) * np.exp(-t / 0.09)
+    gr = growl(0.3, 95, 70, 79) * np.exp(-np.arange(int(0.3 * SR)) / SR / 0.1)
+    out = bump * 0.9
+    out[: len(gr)] += gr * 0.45
+    return fade_edges(lowpass(out, 2500), 0.002, 0.1)
+
+
+def sfx_boss_die():
+    buf = np.zeros((2, int(6.5 * SR)))
+    g = growl(3.0, 82, 36, 80, rattle=18.0)
+    tg = np.arange(len(g)) / SR
+    g = g * np.exp(-tg / 1.5) * np.minimum(1.0, tg / 0.1)
+    place(buf, np.stack([g, g]), 0.0, 0.9)
+    sigh = lowpass(bandpass(noise(2.2, 81), 250, 1800, 1), 2200)
+    ts = np.arange(len(sigh)) / SR
+    sigh = sigh * np.sin(np.pi * np.clip(ts / 2.2, 0, 1)) ** 2
+    place(buf, np.stack([sigh, sigh]), 1.6, 0.3)
+    for i, m in enumerate((77, 74, 69, 65)):             # Glöckchen sinken wie ein Seufzer
+        nt = bell(midi(m), 2.4, 0.4, seed=40 + i)
+        place(buf, np.stack([nt, nt]), 2.2 + 0.5 * i, 0.55)
+    place(buf, pad([50, 57, 62, 65], 2.2, attack=1.4, release=1.8, seed=14), 2.4, 0.28)
+    return trim_tail(reverb_once(buf, IR_HALL, 0.4), fade=0.6)
+
+
+def sfx_victory():
+    buf = np.zeros((2, int(7.0 * SR)))
+    for i, m in enumerate((77, 81, 84, 89, 93, 96)):               # F A C F A C aufwärts
+        nt = bell(midi(m), 2.6, 0.6, seed=60 + i) + 0.4 * np.pad(ep(midi(m - 12), 1.4, 0.4), (0, int(2.6 * SR) - int(1.4 * SR)))
+        place(buf, np.stack([nt, nt]), 0.13 * i)
+    for i, (m, t0) in enumerate(((88, 1.1), (84, 1.55), (89, 2.0), (93, 2.6))):   # kleine Melodie
+        nt = bell(midi(m), 2.4, 0.5, seed=70 + i)
+        place(buf, np.stack([nt * 0.8, nt]), t0)
+    place(buf, pad([41, 53, 57, 60, 65], 2.8, attack=0.4, release=2.2, seed=21), 0.0, 0.4)
+    for i in range(6):                                              # Funkeln
+        nt = bell(midi(96 + (i * 5) % 7), 1.6, 0.25, seed=90 + i)
+        place(buf, np.stack([nt, nt * 0.5]) if i % 2 else np.stack([nt * 0.5, nt]), 1.0 + 0.4 * i)
+    return trim_tail(reverb_once(buf, IR_HALL, 0.5), fade=0.8)
+
+
+def sfx_portal():
+    buf = np.zeros((2, int(2.4 * SR)))
+    sw = sweep(1.2, 300, 2600, 82, 0.45)
+    place(buf, np.stack([sw, sw]), 0.0)
+    for i, m in enumerate((91, 98, 103)):
+        nt = bell(midi(m), 1.2, 0.35, seed=50 + i)
+        place(buf, np.stack([nt, nt * 0.6]) if i % 2 else np.stack([nt * 0.6, nt]), 0.45 + 0.25 * i)
+    place(buf, pad([53, 60, 65], 1.2, attack=0.6, release=1.2, seed=22), 0.0, 0.3)
+    return trim_tail(reverb_once(buf, IR_MED, 0.4), fade=0.5)
+
+
 # ===================================================================== Ausgabe
 def _norm(x, peak_db):
     p = np.max(np.abs(x))
@@ -832,6 +1144,21 @@ def build_sfx():
     save_wav("sfx_heal", sfx_heal(), -12.0)
     save_wav("sfx_death", sfx_death(), -5.0)
     save_wav("sfx_respawn", sfx_respawn(), -5.0)
+    save_wav("sfx_sprint", sfx_sprint(), -14.0)
+    save_wav("sfx_tired", sfx_tired(), -15.0)
+    save_wav("sfx_throw", sfx_throw(), -10.0)
+    save_wav("sfx_snowball", sfx_snowball(), -10.0)
+    save_wav("sfx_pounce", sfx_pounce(), -9.0)
+    save_wav("sfx_roll", sfx_roll(), -10.0)
+    save_wav("sfx_tink", sfx_tink(), -9.0)
+    save_wav("sfx_boss_roar", sfx_boss_roar(), -3.0)
+    save_wav("sfx_boss_swipe", sfx_boss_swipe(), -5.0)
+    save_wav("sfx_boss_slam", sfx_boss_slam(), -2.0)
+    save_wav("sfx_shards", sfx_shards(), -8.0)
+    save_wav("sfx_boss_hit", sfx_boss_hit(), -5.0)
+    save_wav("sfx_boss_die", sfx_boss_die(), -4.0)
+    save_wav("sfx_victory", sfx_victory(), -4.0)
+    save_wav("sfx_portal", sfx_portal(), -9.0)
 
 
 if __name__ == "__main__":
@@ -840,6 +1167,9 @@ if __name__ == "__main__":
         print("Musik:")
         build_music()
         build_alert_layer()
+    if what in ("all", "boss"):
+        print("Boss-Musik:")
+        build_boss_music()
     if what in ("all", "ambience"):
         print("Ambiente:")
         build_wind()

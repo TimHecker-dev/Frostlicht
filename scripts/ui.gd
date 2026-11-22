@@ -28,6 +28,11 @@ var level_label: Label
 var health_bar: ProgressBar
 var health_label: Label
 var xp_bar: ProgressBar
+var stamina_bar: ProgressBar
+var prompt_label: Label
+var boss_box: PanelContainer
+var boss_name_label: Label
+var boss_bar: ProgressBar
 var points_hint: Label
 var rest_label: Label
 var toast_label: Label
@@ -63,6 +68,7 @@ class TreeLines extends Control:
 func _ready() -> void:
 	layer = 10
 	process_mode = Node.PROCESS_MODE_ALWAYS       # Oberfläche läuft auch bei Pause weiter
+	add_to_group("ui")
 	root = Control.new()
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -76,6 +82,7 @@ func _ready() -> void:
 	_build_skill_tree()
 	_build_pause_menu()
 	_build_death_screen()
+	_build_boss_bar()
 	_build_toast()
 
 	Game.xp_changed.connect(_refresh_hud)
@@ -89,7 +96,9 @@ func _ready() -> void:
 func bind_player(p: Player) -> void:
 	player = p
 	p.health_changed.connect(_on_health_changed)
+	p.stamina_changed.connect(_on_stamina)
 	_on_health_changed(p.health, Game.max_health())
+	_on_stamina(p.stamina, Player.STAMINA_MAX)
 
 
 func set_resting(resting: bool) -> void:
@@ -193,6 +202,8 @@ func _refresh_hud() -> void:
 
 func _on_level_up(new_level: int) -> void:
 	_toast("Stufe %d erreicht!  Mit K öffnest du den Fähigkeitenbaum." % new_level, GOLD)
+	if new_level == 3 and not Game.boss_defeated:
+		_toast_later("Im Norden schimmert ein blaues Licht ... die Frosthöhle.", Color(0.7, 0.92, 1.0), 3.4)
 
 
 func _refresh_tree() -> void:
@@ -357,6 +368,8 @@ func _build_hud() -> void:
 	health_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	health_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	health_bar.add_child(health_label)
+	stamina_bar = _bar(Color(0.45, 0.88, 0.76), Vector2(250, 8))
+	vb.add_child(stamina_bar)
 	xp_bar = _bar(Color(0.96, 0.78, 0.40), Vector2(250, 8))
 	vb.add_child(xp_bar)
 	points_hint = _label("", 16, GOLD)
@@ -372,13 +385,20 @@ func _build_hud() -> void:
 	rest_label.visible = false
 	root.add_child(rest_label)
 
-	var hint := _label("WASD / Pfeile: Laufen      Leertaste / J / Linksklick: Zuschlagen      K: Fähigkeiten      Esc: Pause",
+	var hint := _label("WASD / Pfeile: Laufen      Shift: Sprinten      Leertaste / J / Linksklick: Zuschlagen      K: Fähigkeiten      E: Betreten      Esc: Pause",
 			14, TEXT_DIM, HORIZONTAL_ALIGNMENT_CENTER)
 	hint.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
 	hint.offset_top = -34.0
 	hint.offset_bottom = -10.0
 	hint.modulate.a = 0.9
 	root.add_child(hint)
+
+	prompt_label = _label("", 20, Color(0.78, 0.94, 1.0), HORIZONTAL_ALIGNMENT_CENTER)
+	prompt_label.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+	prompt_label.offset_top = -86.0
+	prompt_label.offset_bottom = -54.0
+	prompt_label.visible = false
+	root.add_child(prompt_label)
 
 
 func _build_skill_tree() -> void:
@@ -537,6 +557,72 @@ func _build_death_screen() -> void:
 	box.add_child(respawn_button)
 
 
+## Ausdauer-Anzeige (wird orange, solange man völlig außer Puste ist).
+func _on_stamina(current: float, maximum: float) -> void:
+	stamina_bar.max_value = maximum
+	stamina_bar.value = current
+	var fill := stamina_bar.get_theme_stylebox("fill") as StyleBoxFlat
+	if fill != null:
+		fill.bg_color = Color(1.0, 0.62, 0.35) if (player != null and player.exhausted) else Color(0.45, 0.88, 0.76)
+
+
+func _build_boss_bar() -> void:
+	boss_box = PanelContainer.new()
+	boss_box.add_theme_stylebox_override("panel", _box(Color(0.06, 0.09, 0.17, 0.80), Color(1.0, 0.7, 0.55, 0.5), 1, 10, 10.0))
+	boss_box.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)          # unten, damit sie den Boss nie verdeckt
+	boss_box.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	boss_box.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	boss_box.offset_bottom = -52.0
+	boss_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 6)
+	boss_box.add_child(vb)
+	boss_name_label = _label("", 20, Color(1.0, 0.78, 0.62), HORIZONTAL_ALIGNMENT_CENTER)
+	vb.add_child(boss_name_label)
+	boss_bar = _bar(Color(0.82, 0.36, 0.36), Vector2(520, 16))
+	vb.add_child(boss_bar)
+	boss_box.visible = false
+	root.add_child(boss_box)
+
+
+## Lebensleiste des Endgegners unten in der Mitte.
+func show_boss_bar(boss_name: String, hp: int, maximum: int) -> void:
+	boss_name_label.text = boss_name
+	boss_bar.max_value = maximum
+	boss_bar.value = hp
+	boss_box.modulate.a = 0.0
+	boss_box.visible = true
+	create_tween().tween_property(boss_box, "modulate:a", 1.0, 0.6)
+
+
+func set_boss_hp(hp: int, maximum: int, enraged := false) -> void:
+	boss_bar.max_value = maximum
+	create_tween().tween_property(boss_bar, "value", float(hp), 0.15)
+	var fill := boss_bar.get_theme_stylebox("fill") as StyleBoxFlat
+	if fill != null:
+		fill.bg_color = Color(0.95, 0.42, 0.28) if enraged else Color(0.82, 0.36, 0.36)
+
+
+func hide_boss_bar() -> void:
+	boss_box.visible = false
+
+
+## Hinweis unten in der Mitte (z. B. "E: Betreten"); leerer Text blendet ihn aus.
+func set_prompt(text: String) -> void:
+	prompt_label.text = text
+	prompt_label.visible = text != ""
+
+
+## Kurze Meldung oben in der Mitte (öffentliche Variante von _toast).
+func announce(text: String, color: Color = TEXT) -> void:
+	_toast(text, color)
+
+
+func _toast_later(text: String, color: Color, delay: float) -> void:
+	await get_tree().create_timer(delay).timeout
+	_toast(text, color)
+
+
 func _build_toast() -> void:
 	toast_label = _label("", 20, TEXT, HORIZONTAL_ALIGNMENT_CENTER)
 	toast_label.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
@@ -563,5 +649,4 @@ func _on_respawn_pressed() -> void:
 
 
 func _restart() -> void:
-	Game.new_game()
-	get_tree().reload_current_scene()
+	Scenes.restart_game()

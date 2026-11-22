@@ -62,6 +62,11 @@ var ranks := {"health": 0, "attack": 0, "defence": 0}   # freigeschaltete Stufen
 
 var ui_font: Font = null
 
+# Zustand, der beim Wechsel zwischen Gebieten (Wald <-> Frosthöhle) erhalten bleibt
+var boss_defeated := false
+var carry_health := -1          # Leben, das mitgenommen wird (-1 = voll)
+var next_entry := ""            # woher man kommt: "", "from_arena", "respawn"
+
 
 func _ready() -> void:
 	_register_inputs()
@@ -118,6 +123,12 @@ func unlock_next(branch: String) -> bool:
 	return true
 
 
+## Schenkt Fähigkeitspunkte (z. B. als Belohnung für den Boss).
+func add_skill_points(n: int) -> void:
+	skill_points += n
+	xp_changed.emit()
+
+
 ## Gibt alle Fähigkeitspunkte kostenlos zurück (zum Ausprobieren).
 func reset_skills() -> void:
 	for b in BRANCHES:
@@ -132,6 +143,9 @@ func new_game() -> void:
 	level = 1
 	xp = 0
 	skill_points = 0
+	boss_defeated = false
+	carry_health = -1
+	next_entry = ""
 	for b in BRANCHES:
 		ranks[b] = 0
 	Engine.time_scale = 1.0
@@ -153,6 +167,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.keycode == KEY_F9:        # Test-Taste: sofort eine Stufe aufsteigen
 		add_xp(xp_to_next())
+	elif event.keycode == KEY_F10:     # Test-Taste: direkt in die Frosthöhle (Bossfight)
+		Scenes.change_area(Scenes.ARENA)
 	elif event.keycode == KEY_F11:     # Vollbild an/aus
 		var fullscreen := DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN
 		DisplayServer.window_set_mode(
@@ -180,6 +196,8 @@ func _register_inputs() -> void:
 	_action("move_down", [KEY_S, KEY_DOWN], [JOY_BUTTON_DPAD_DOWN], [[JOY_AXIS_LEFT_Y, 1.0]])
 	_action("attack", [KEY_SPACE, KEY_J], [JOY_BUTTON_X, JOY_BUTTON_A], [], true)
 	_action("skill_tree", [KEY_K], [JOY_BUTTON_Y])
+	_action("sprint", [KEY_SHIFT], [JOY_BUTTON_RIGHT_SHOULDER, JOY_BUTTON_LEFT_STICK])
+	_action("interact", [KEY_E], [JOY_BUTTON_B])
 	_action("pause", [KEY_ESCAPE, KEY_P], [JOY_BUTTON_START])
 
 

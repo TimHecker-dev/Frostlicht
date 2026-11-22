@@ -24,6 +24,8 @@ const FIRE_DB := 4.0            # Lagerfeuer-Knistern (räumlich, wird mit Absta
 const MENU_CUTOFF := 750.0      # Tiefpass im Menü (Hz)
 const OPEN_CUTOFF := 20000.0
 const SHELTER_DB := -7.0        # so viel leiser wird der Wind direkt am Feuer
+const BOSS_DB := 0.0            # Bosskampf-Musik
+const RAGE_DB := -2.0           # zusätzliche Ebene, wenn der Boss wütend wird
 
 # Name -> [Varianten (Dateinamen), Zusatz-Lautstärke dB, zufällige Tonhöhen-Streuung]
 const SOUNDS := {
@@ -44,6 +46,21 @@ const SOUNDS := {
 	"ui_open": [["sfx_ui_open"], 0.0, 0.0],
 	"ui_close": [["sfx_ui_close"], 0.0, 0.0],
 	"deny": [["sfx_deny"], 0.0, 0.0],
+	"sprint": [["sfx_sprint"], 0.0, 0.05],
+	"tired": [["sfx_tired"], 0.0, 0.03],
+	"throw": [["sfx_throw"], 0.0, 0.05],
+	"snowball": [["sfx_snowball"], 0.0, 0.08],
+	"pounce": [["sfx_pounce"], 0.0, 0.06],
+	"roll": [["sfx_roll"], 0.0, 0.05],
+	"tink": [["sfx_tink"], 0.0, 0.08],
+	"boss_roar": [["sfx_boss_roar"], 0.0, 0.02],
+	"boss_swipe": [["sfx_boss_swipe"], 0.0, 0.03],
+	"boss_slam": [["sfx_boss_slam"], 0.0, 0.02],
+	"shards": [["sfx_shards"], 0.0, 0.04],
+	"boss_hit": [["sfx_boss_hit"], 0.0, 0.05],
+	"boss_die": [["sfx_boss_die"], 0.0, 0.0],
+	"victory": [["sfx_victory"], 0.0, 0.0],
+	"portal": [["sfx_portal"], 0.0, 0.0],
 }
 
 var music_volume := 0.8          # 0..1, im Pause-Menü einstellbar
@@ -71,6 +88,12 @@ var _shelter_target := 0.0
 var _poll_t := 0.0
 var _save_t := -1.0
 var _quitting := false
+var _boss_music: AudioStreamPlayer
+var _boss_rage: AudioStreamPlayer
+var _boss_target := 0.0
+var _boss_level := 0.0
+var _rage_target := 0.0
+var _rage_level := 0.0
 var _quit_fade := 1.0
 var _extra_loops: Array[AudioStreamPlayer2D] = []     # z. B. das Lagerfeuer-Knistern
 
@@ -101,7 +124,7 @@ func quit_game() -> void:
 	var tw := create_tween()
 	tw.tween_property(self, "_quit_fade", 0.0, 0.5)
 	await tw.finished
-	for p in [_music, _alert, _wind]:
+	for p in [_music, _alert, _wind, _boss_music, _boss_rage]:
 		if p != null:
 			p.stop()
 	for p2 in _extra_loops:
@@ -157,6 +180,41 @@ func loop_stream(file: String) -> AudioStream:
 	if s is AudioStreamOggVorbis:
 		(s as AudioStreamOggVorbis).loop = true
 	return s
+
+
+## Musik-Modus: "world" (ruhig) oder "boss" (Kampfmusik). Wird weich überblendet.
+func set_mode(mode: String) -> void:
+	_boss_target = 1.0 if mode == "boss" else 0.0
+	if _boss_target > 0.5:
+		_rage_target = 0.0
+		_rage_level = 0.0
+		_ensure_boss_players()
+
+
+## Zusätzliche Kampf-Ebene (Boss wird wütend).
+func set_boss_rage(on: bool) -> void:
+	_rage_target = 1.0 if on else 0.0
+
+
+func _ensure_boss_players() -> void:
+	if _boss_music != null:
+		return
+	_boss_music = _loop_player("music_boss", BUS_MUSIC)
+	_boss_rage = _loop_player("music_boss_rage", BUS_MUSIC)
+	if _boss_music == null or _boss_rage == null:
+		_stop_boss_players()
+		return
+	_boss_music.play()                              # beide starten gleichzeitig und bleiben im Takt
+	_boss_rage.play()
+
+
+func _stop_boss_players() -> void:
+	for p in [_boss_music, _boss_rage]:
+		if p != null:
+			p.stop()
+			p.queue_free()
+	_boss_music = null
+	_boss_rage = null
 
 
 func set_music_volume(v: float) -> void:
@@ -285,6 +343,9 @@ func _process(delta: float) -> void:
 	var rate := 0.6 if _hostile_hold > 0.0 else 0.28
 	_alert_level = move_toward(_alert_level, 1.0 if _hostile_hold > 0.0 else 0.0, delta * rate)
 	_shelter = move_toward(_shelter, _shelter_target, delta * 0.8)
+	_boss_level = move_toward(_boss_level, _boss_target, delta / 1.6)
+	_rage_level = move_toward(_rage_level, _rage_target if _boss_level > 0.5 else 0.0, delta / 1.2)
+	var calm := 1.0 - _boss_level                 # ruhige Musik tritt zurück, wenn die Boss-Musik läuft
 
 	# Menü: Tiefpass zufahren, ein wenig leiser
 	_muffle = move_toward(_muffle, 1.0 if get_tree().paused else 0.0, delta * 2.5)
@@ -295,11 +356,17 @@ func _process(delta: float) -> void:
 	var duck := -3.0 * k
 
 	if _music != null:
-		_music.volume_db = MUSIC_DB + duck + _level_db(_fade_in * _quit_fade)
+		_music.volume_db = MUSIC_DB + duck + _level_db(_fade_in * _quit_fade * calm)
 	if _alert != null:
-		_alert.volume_db = ALERT_DB + duck + _level_db(_alert_level * _quit_fade)
+		_alert.volume_db = ALERT_DB + duck + _level_db(_alert_level * _quit_fade * calm)
 	if _wind != null:
 		_wind.volume_db = WIND_DB + duck + _level_db(_fade_in * _quit_fade) + SHELTER_DB * _shelter
+
+	if _boss_music != null and _boss_rage != null:
+		_boss_music.volume_db = BOSS_DB + duck + _level_db(_boss_level * _quit_fade)
+		_boss_rage.volume_db = RAGE_DB + duck + _level_db(_rage_level * _boss_level * _quit_fade)
+		if _boss_level <= 0.0 and _boss_target <= 0.0:
+			_stop_boss_players()
 
 	if _save_t > 0.0:
 		_save_t -= delta

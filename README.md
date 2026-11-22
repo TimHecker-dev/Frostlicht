@@ -76,9 +76,44 @@ All images in `art/` are placeholders generated programmatically by `tools/make_
 
 You can replace any image with your own pixel art, as long as you keep the same filename. For characters and trees, the ground contact point should be at the bottom edge of the image. `player.png` is a sprite strip containing three frames (front, back, and side), each measuring 24 × 32 pixels.
 
-## Ideas for Future Development
+## Completed
+- [x] Character
+- [x] Sprinting
+- [x] Enemies
+- [x] Combat System
+- [x] Skill System
+- [x] Boss Fight
+- [x] Music and Sound Effects
+- [x] Main Menu with Settings
 
-Real walking animations, loot and small collectible items, save/load functionality, additional enemies and areas, a day-night cycle, longer-lasting footprints in the snow, and a second music track for a new area (add new chords and a melody in `tools/make_audio.py`).
+## Ideas for Future Development
+- [ ] Add a Dash Ability for the Player
+- [ ] Implement a Proper Sprint Animation
+- [ ] **Items and Equipment**
+  - [ ] Weapons: Swords, Axes, Spears
+  - [ ] Armor
+  - **Weapon Ideas:**
+    - Dull Blade / Rusty Sword
+    - Iron Sword
+    - Frost Sword
+    - Dull Axe / Rusty Axe
+    - Iron Axe
+    - Frost Axe
+    - Wooden Spear
+    - Iron Spear
+    - Frost Spear
+  - **Armor Ideas:**
+    - Fur Armor
+    - Iron Armor
+    - Frost Armor
+- [ ] NPCs (Merchants, etc.)
+- [ ] Passive Wildlife
+- [ ] Expand the Map and Add More Variety
+  - Add a Small Village with 5–6 Houses to serve as a Merchant Area
+- [ ] Day and Night Cycle
+- [ ] Easter Eggs
+- [ ] Minimap (Maybe?)
+- [ ] Official Ending (Main Objective of the Game)
 
 ## License and Credits
 
